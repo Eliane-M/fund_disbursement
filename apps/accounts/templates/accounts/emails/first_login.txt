@@ -1,0 +1,9 @@
+{% autoescape off %}
+Hi {{ user.first_name }},
+
+This is your first sign-in to {{ site_name }}. Use this one-time code to finish logging in:
+
+{{ code }}
+
+This code expires in {{ minutes }} minutes. If you did not try to sign in, reset your password immediately.
+{% endautoescape %}

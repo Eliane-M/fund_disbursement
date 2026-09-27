@@ -1,0 +1,14 @@
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.sqlite3
+db.sqlite3
+.env
+*.log
+.pytest_cache/
+.coverage
+htmlcov/
+staticfiles/
+media/
+.python-version
