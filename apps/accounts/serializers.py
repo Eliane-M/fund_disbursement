@@ -7,8 +7,18 @@ from accounts.models import OTPPurpose
 User = get_user_model()
 
 
+class MembershipMiniSerializer(serializers.Serializer):
+    id = serializers.UUIDField()
+    organization = serializers.UUIDField(source="organization_id")
+    organization_name = serializers.CharField(source="organization.name")
+    role = serializers.CharField()
+    status = serializers.CharField()
+
+
 class UserSerializer(serializers.ModelSerializer):
     full_name = serializers.CharField(read_only=True)
+    is_platform_admin = serializers.SerializerMethodField()
+    memberships = serializers.SerializerMethodField()
 
     class Meta:
         model = User
@@ -21,6 +31,8 @@ class UserSerializer(serializers.ModelSerializer):
             "phone_number",
             "is_email_verified",
             "is_first_login",
+            "is_platform_admin",
+            "memberships",
             "date_joined",
         )
         read_only_fields = (
@@ -30,6 +42,15 @@ class UserSerializer(serializers.ModelSerializer):
             "is_first_login",
             "date_joined",
         )
+
+    def get_is_platform_admin(self, user):
+        from accounts.permissions import is_platform_admin
+
+        return is_platform_admin(user)
+
+    def get_memberships(self, user):
+        memberships = user.memberships.select_related("organization")
+        return MembershipMiniSerializer(memberships, many=True).data
 
 
 class RegisterSerializer(serializers.Serializer):
@@ -103,6 +124,14 @@ class PasswordResetSerializer(serializers.Serializer):
 
 class PasswordChangeSerializer(serializers.Serializer):
     current_password = serializers.CharField(write_only=True, trim_whitespace=False)
+    new_password = serializers.CharField(write_only=True, min_length=10, trim_whitespace=False)
+
+    def validate_new_password(self, value):
+        validate_password(value, user=self.context.get("user"))
+        return value
+
+
+class SetInitialPasswordSerializer(serializers.Serializer):
     new_password = serializers.CharField(write_only=True, min_length=10, trim_whitespace=False)
 
     def validate_new_password(self, value):

@@ -10,7 +10,7 @@ from django.utils import timezone
 from rest_framework.exceptions import AuthenticationFailed, PermissionDenied, ValidationError
 from rest_framework_simplejwt.tokens import RefreshToken
 
-from accounts.emails import send_otp_email
+from accounts.emails import send_otp_email, send_password_reset_by_admin_email, send_welcome_email
 from accounts.models import AuthEvent, AuthEventType, OTPChallenge, OTPPurpose
 
 User = get_user_model()
@@ -321,10 +321,22 @@ def verify_first_login(*, email, otp, request=None):
         raise ValidationError({"detail": "First-login verification is no longer required."})
 
     verify_otp(user, OTPPurpose.FIRST_LOGIN, otp, request=request)
-    user.is_first_login = False
-    user.save(update_fields=["is_first_login", "updated_at"])
+    # is_first_login stays True until they set their own password via
+    # set_initial_password — it doubles as "activation isn't complete yet".
     record_auth_event(AuthEventType.FIRST_LOGIN_COMPLETED, user=user, request=request)
     record_auth_event(AuthEventType.LOGIN_SUCCESS, user=user, request=request)
+    return user
+
+
+def set_initial_password(*, user, new_password, request=None):
+    if not user.is_first_login:
+        raise ValidationError({"detail": "Your account is already activated."})
+
+    user.set_password(new_password)
+    user.is_first_login = False
+    user.password_changed_at = timezone.now()
+    user.save(update_fields=["password", "is_first_login", "password_changed_at", "updated_at"])
+    record_auth_event(AuthEventType.PASSWORD_CHANGED, user=user, request=request)
     return user
 
 
@@ -374,6 +386,63 @@ def change_password(*, user, current_password, new_password, request=None):
     user.password_changed_at = timezone.now()
     user.save(update_fields=["password", "password_changed_at", "updated_at"])
     record_auth_event(AuthEventType.PASSWORD_CHANGED, user=user, request=request)
+    return user
+
+
+def invite_member(*, organization, email, role, invited_by, first_name="", last_name="", respondent=None):
+    """Add a user to an organization with a role.
+
+    If no account exists for the email yet, one is created with a generated
+    temporary password and `is_first_login=True` — the existing login ->
+    first-login-OTP flow (already built) handles activation. The temporary
+    password is emailed directly to the invited user (never returned to the
+    inviter); on first sign-in they verify an OTP and are then required to
+    set their own password. Returns (membership, is_new_account).
+    """
+    from accounts.models import MembershipStatus, OrganizationMembership
+
+    normalized = User.objects.normalize_email(email)
+    user = User.objects.filter(email=normalized).first()
+    is_new_account = user is None
+
+    if user is None:
+        temp_password = secrets.token_urlsafe(9)
+        user = User.objects.create_user(
+            email=normalized,
+            password=temp_password,
+            first_name=first_name or "",
+            last_name=last_name or "",
+            is_email_verified=True,
+        )
+        record_auth_event(AuthEventType.REGISTERED, user=user, request=None, metadata={"invited": True})
+        send_welcome_email(user, organization, invited_by, temp_password)
+
+    if OrganizationMembership.objects.filter(organization=organization, user=user).exists():
+        raise ValidationError({"email": "This person is already a member of the organization."})
+
+    membership = OrganizationMembership.objects.create(
+        organization=organization,
+        user=user,
+        role=role,
+        respondent=respondent,
+        status=MembershipStatus.ACTIVE,
+        invited_by=invited_by,
+        accepted_at=timezone.now(),
+    )
+    return membership, is_new_account
+
+
+def reset_password_by_admin(*, user, actor, request=None):
+    """An admin-initiated password reset: generate a new temp password, force
+    re-activation through the first-login OTP + set-password flow (same as a
+    brand-new invite), and email the user directly — the admin never sees it.
+    """
+    temp_password = secrets.token_urlsafe(9)
+    user.set_password(temp_password)
+    user.is_first_login = True
+    user.save(update_fields=["password", "is_first_login", "updated_at"])
+    send_password_reset_by_admin_email(user, actor, temp_password)
+    record_auth_event(AuthEventType.PASSWORD_RESET_REQUESTED, user=user, request=request, metadata={"by_admin": True})
     return user
 
 

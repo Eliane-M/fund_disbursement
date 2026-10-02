@@ -44,7 +44,7 @@ MIDDLEWARE = [
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
 
-ROOT_URLCONF = "fund_disbursement.urls"
+ROOT_URLCONF = "core.urls"
 
 TEMPLATES = [
     {
@@ -61,7 +61,7 @@ TEMPLATES = [
     },
 ]
 
-WSGI_APPLICATION = "fund_disbursement.wsgi.application"
+WSGI_APPLICATION = "core.wsgi.application"
 
 if config("DB_ENGINE", default="sqlite") == "postgres":
     DATABASES = {
@@ -108,7 +108,7 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 CORS_ALLOWED_ORIGINS = config(
     "CORS_ALLOWED_ORIGINS",
-    default="http://localhost:3000,http://127.0.0.1:3000",
+    default="http://localhost:8000,http://127.0.0.1:8000",
     cast=Csv(),
 )
 
@@ -138,20 +138,22 @@ SIMPLE_JWT = {
 
 _email_backend = config(
     "EMAIL_BACKEND",
-    default="django.core.mail.backends.console.EmailBackend",
+    default="django.core.mail.backends.smtp.EmailBackend",
 )
+_email_user = config("EMAIL_HOST_USER", default="")
 DEFAULT_FROM_EMAIL = config(
     "DEFAULT_FROM_EMAIL",
-    default="Fund Disbursement <noreply@localhost>",
+    default=_email_user or "Fund Disbursement <noreply@localhost>",
 )
 
 _smtp_options = {
-    "host": config("EMAIL_HOST", default="localhost"),
+    "host": config("EMAIL_HOST", default="smtp.gmail.com"),
     "port": config("EMAIL_PORT", default=587, cast=int),
-    "username": config("EMAIL_HOST_USER", default=""),
+    "username": _email_user,
     "password": config("EMAIL_HOST_PASSWORD", default=""),
     "use_tls": config("EMAIL_USE_TLS", default=True, cast=bool),
     "use_ssl": config("EMAIL_USE_SSL", default=False, cast=bool),
+    "timeout": 20,
 }
 MAILERS = {
     "default": {

@@ -97,6 +97,21 @@ class Response(UUIDPrimaryKey):
     is_not_applicable = models.BooleanField(default=False)
     answered_at = models.DateTimeField(auto_now=True)
 
+    # Manual grading for scored free-text answers: auto-scored question types
+    # (yes_no, select, likert, numeric) are computed from answer_value/options
+    # and never touch these fields. A scored free-text question instead sits
+    # "pending review" (reviewer_score is null) until a reviewer reads the
+    # answer and assigns points — see Question.is_scored + QuestionType.FREE_TEXT.
+    reviewer_score = models.DecimalField(max_digits=6, decimal_places=2, null=True, blank=True)
+    reviewed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="reviewed_responses",
+    )
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+
     class Meta:
         db_table = "responses"
         constraints = [
@@ -105,7 +120,18 @@ class Response(UUIDPrimaryKey):
                 name="responses_invitation_question_uniq",
             ),
         ]
-        indexes = [models.Index(fields=["invitation"], name="ix_responses_invitation")]
+        indexes = [
+            models.Index(fields=["invitation"], name="ix_responses_invitation"),
+            models.Index(
+                fields=["question"],
+                name="ix_responses_pending_review",
+                condition=models.Q(reviewer_score__isnull=True),
+            ),
+        ]
+
+    @property
+    def needs_review(self):
+        return self.question.is_scored and self.question.question_type == "free_text" and self.reviewer_score is None
 
     def __str__(self):
         return f"{self.invitation_id} · {self.question_id}"
@@ -171,7 +197,12 @@ class ScoreResult(UUIDPrimaryKey):
             models.UniqueConstraint(
                 fields=["invitation", "capability", "sub_capability"],
                 name="score_results_invitation_cap_sub_uniq",
-                nulls_distinct=False,
+                condition=models.Q(sub_capability__isnull=False),
+            ),
+            models.UniqueConstraint(
+                fields=["invitation", "capability"],
+                name="score_results_invitation_cap_rollup_uniq",
+                condition=models.Q(sub_capability__isnull=True),
             ),
         ]
         indexes = [models.Index(fields=["invitation"], name="ix_score_results_invitation")]

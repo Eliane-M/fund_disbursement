@@ -39,3 +39,44 @@ def send_otp_email(user, purpose, code):
     )
     message.attach_alternative(html_body, "text/html")
     return message.send(using="default")
+
+
+def send_password_reset_by_admin_email(user, actor, temp_password):
+    context = {
+        "user": user,
+        "actor_name": actor.full_name if actor else "An admin",
+        "temp_password": temp_password,
+        "site_name": settings.SITE_NAME,
+    }
+    text_body = render_to_string("accounts/emails/password_reset_by_admin.txt", context)
+    html_body = render_to_string("accounts/emails/password_reset_by_admin.html", context)
+
+    message = EmailMultiAlternatives(
+        subject=f"Your {settings.SITE_NAME} password was reset",
+        body=text_body,
+        from_email=settings.DEFAULT_FROM_EMAIL,
+        to=[user.email],
+    )
+    message.attach_alternative(html_body, "text/html")
+    return message.send(using="default")
+
+
+def send_welcome_email(user, organization, inviter, temp_password):
+    context = {
+        "user": user,
+        "organization_name": organization.name,
+        "inviter_name": inviter.full_name if inviter else "An admin",
+        "temp_password": temp_password,
+        "site_name": settings.SITE_NAME,
+    }
+    text_body = render_to_string("accounts/emails/welcome.txt", context)
+    html_body = render_to_string("accounts/emails/welcome.html", context)
+
+    message = EmailMultiAlternatives(
+        subject=f"You've been added to {organization.name}",
+        body=text_body,
+        from_email=settings.DEFAULT_FROM_EMAIL,
+        to=[user.email],
+    )
+    message.attach_alternative(html_body, "text/html")
+    return message.send(using="default")

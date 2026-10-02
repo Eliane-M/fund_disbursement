@@ -113,10 +113,9 @@ class Question(TimestampedModel):
                 condition=models.Q(max_points__gt=0),
                 name="questions_max_points_positive",
             ),
-            models.CheckConstraint(
-                condition=~models.Q(question_type=QuestionType.FREE_TEXT) | models.Q(is_scored=False),
-                name="questions_free_text_not_scored",
-            ),
+            # Free-text questions may be scored (is_scored=True), but unlike the
+            # other types they're never auto-computed — a reviewer manually
+            # assigns Response.reviewer_score. See Response.reviewer_score.
         ]
         indexes = [
             models.Index(

@@ -80,7 +80,12 @@ class Recommendation(UUIDPrimaryKey):
             models.UniqueConstraint(
                 fields=["capability", "band"],
                 name="recommendations_capability_band_uniq",
-                nulls_distinct=False,
+                condition=models.Q(band__isnull=False),
+            ),
+            models.UniqueConstraint(
+                fields=["capability"],
+                name="recommendations_capability_gap_uniq",
+                condition=models.Q(band__isnull=True),
             ),
         ]
 

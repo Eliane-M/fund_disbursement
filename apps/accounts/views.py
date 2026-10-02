@@ -13,6 +13,7 @@ from accounts.serializers import (
     PasswordResetSerializer,
     RegisterSerializer,
     ResendOTPSerializer,
+    SetInitialPasswordSerializer,
     UserSerializer,
 )
 from accounts.services import (
@@ -24,6 +25,7 @@ from accounts.services import (
     request_password_reset,
     resend_otp,
     reset_password,
+    set_initial_password,
     verify_email,
     verify_first_login,
 )
@@ -134,6 +136,16 @@ def password_change(request):
     serializer.is_valid(raise_exception=True)
     change_password(user=request.user, request=request, **serializer.validated_data)
     return Response({"detail": "Password changed successfully."})
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+@throttle_classes([AuthenticatedUserRateThrottle])
+def password_set_initial(request):
+    serializer = SetInitialPasswordSerializer(data=request.data, context={"user": request.user})
+    serializer.is_valid(raise_exception=True)
+    user = set_initial_password(user=request.user, request=request, **serializer.validated_data)
+    return Response(UserSerializer(user).data)
 
 
 @api_view(["POST"])
