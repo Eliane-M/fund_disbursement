@@ -1,0 +1,10 @@
+Hi,
+
+{{ respondent_name }} has submitted the {{ assessment_name }} assessment for {{ organization_name }}.
+
+Auto-scored result: {{ overall_score }}/100{% if maturity_band_label %} - {{ maturity_band_label }}{% endif %}.
+{% if pending_review %}
+{{ pending_review }} free-text answer(s) still need your points before the score is final.
+{% endif %}
+The report has been generated as a draft. Sign in to review it and share it with the respondent:
+{{ login_url }}

@@ -134,6 +134,8 @@ class EvidenceFile(UUIDPrimaryKey):
     file = models.ForeignKey(
         "core.File",
         on_delete=models.PROTECT,
+        null=True,
+        blank=True,
         related_name="evidence_files",
     )
     requirement = models.ForeignKey(
@@ -148,10 +150,16 @@ class EvidenceFile(UUIDPrimaryKey):
 
     class Meta:
         db_table = "evidence_files"
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(file__isnull=False) | ~models.Q(external_url=""),
+                name="evidence_files_file_or_url",
+            ),
+        ]
         indexes = [models.Index(fields=["submission"], name="ix_evidence_files_submission")]
 
     def __str__(self):
-        return str(self.file_id)
+        return str(self.file_id or self.external_url)
 
 
 class KPIResult(UUIDPrimaryKey):

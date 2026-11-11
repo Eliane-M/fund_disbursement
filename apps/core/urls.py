@@ -13,4 +13,6 @@ urlpatterns = [
         name="core-organization-members",
     ),
     path("memberships/<uuid:pk>/", views.membership_detail, name="core-membership-detail"),
+    path("notifications/", views.notifications_list, name="core-notifications"),
+    path("notifications/<uuid:pk>/read/", views.notification_mark_read, name="core-notification-read"),
 ]

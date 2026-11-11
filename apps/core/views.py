@@ -1,5 +1,6 @@
 from django.db import transaction
 from django.shortcuts import get_object_or_404
+from django.utils import timezone
 from django.utils.text import slugify
 from rest_framework import generics, status
 from rest_framework.decorators import api_view
@@ -7,12 +8,21 @@ from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
 
 from accounts.models import MembershipRole, MembershipStatus, OrganizationMembership
-from accounts.services import invite_member
-from apps.core.models import Organization, OrganizationModule, PlatformModule, Respondent
+from accounts.services import STAFF_ROLES, assert_role_available, invite_member
+from apps.core.models import (
+    Notification,
+    NotificationChannel,
+    NotificationStatus,
+    Organization,
+    OrganizationModule,
+    PlatformModule,
+    Respondent,
+)
 from apps.core.permissions import assert_org_member, require_organization_id
 from apps.core.serializers import (
     InviteMemberSerializer,
     MembershipSerializer,
+    NotificationSerializer,
     OrganizationCreateSerializer,
     OrganizationSerializer,
     RespondentSerializer,
@@ -91,7 +101,7 @@ class RespondentListCreateView(generics.ListCreateAPIView):
 
     def get_queryset(self):
         organization_id = require_organization_id(self.request)
-        assert_org_member(self.request.user, organization_id)
+        assert_org_member(self.request.user, organization_id, roles=STAFF_ROLES)
         return Respondent.objects.filter(organization_id=organization_id).order_by("name")
 
     def perform_create(self, serializer):
@@ -161,8 +171,29 @@ def membership_detail(request, pk):
     role = request.data.get("role")
     membership_status = request.data.get("status")
     if role and role in MembershipRole.values:
+        if role != membership.role:
+            assert_role_available(membership.user, role, exclude_membership=membership)
         membership.role = role
     if membership_status and membership_status in MembershipStatus.values:
         membership.status = membership_status
     membership.save(update_fields=["role", "status"])
     return Response(MembershipSerializer(membership).data)
+
+
+@api_view(["GET"])
+def notifications_list(request):
+    """In-app notifications for the signed-in user, newest first."""
+    notifications = Notification.objects.filter(
+        recipient_user=request.user, channel=NotificationChannel.IN_APP
+    ).order_by("-created_at")[:50]
+    return Response(NotificationSerializer(notifications, many=True).data)
+
+
+@api_view(["POST"])
+def notification_mark_read(request, pk):
+    notification = get_object_or_404(Notification, pk=pk, recipient_user=request.user)
+    if notification.read_at is None:
+        notification.read_at = timezone.now()
+        notification.status = NotificationStatus.READ
+        notification.save(update_fields=["read_at", "status"])
+    return Response(NotificationSerializer(notification).data)

@@ -12,6 +12,8 @@ from apps.maturity_assessment.models import (
     Recommendation,
     Report,
     ReportGap,
+    ReportShareStatus,
+    Response,
     ScoreResult,
     SubCapability,
 )
@@ -161,7 +163,13 @@ class QuestionSerializer(serializers.ModelSerializer):
     def validate(self, attrs):
         capability = attrs.get("capability") or getattr(self.instance, "capability", None)
         assessment = getattr(self.instance, "assessment", None) or self.context.get("assessment")
-        sub_capability = attrs.get("sub_capability") or getattr(self.instance, "sub_capability", None)
+        # An explicit null clears the sub-capability, so absence and None must be told
+        # apart here — otherwise a PATCH moving a question to another capability while
+        # clearing its sub would re-check the stale sub and reject a valid edit.
+        if "sub_capability" in attrs:
+            sub_capability = attrs["sub_capability"]
+        else:
+            sub_capability = getattr(self.instance, "sub_capability", None)
         if capability is not None and assessment is not None and capability.assessment_id != assessment.id:
             raise serializers.ValidationError({"capability": "Capability must belong to the same assessment."})
         if sub_capability is not None and capability is not None and sub_capability.capability_id != capability.id:
@@ -327,3 +335,215 @@ class ReportDetailSerializer(serializers.ModelSerializer):
 
 class ReportShareUpdateSerializer(serializers.Serializer):
     share_status = serializers.ChoiceField(choices=("draft", "shared", "withheld"))
+
+
+# --- Respondent-facing ("my") serializers --------------------------------
+#
+# Deliberately narrower than the admin serializers: no access_token, no
+# reviewer notes, and a report only surfaces once an admin has shared it.
+
+
+class MyInvitationSerializer(serializers.ModelSerializer):
+    organization_name = serializers.CharField(source="organization.name", read_only=True)
+    assessment_name = serializers.CharField(source="assessment.name", read_only=True)
+    assessment_version_label = serializers.CharField(source="assessment.version_label", read_only=True)
+    category_name = serializers.CharField(source="assessment.category.name", read_only=True, default="")
+    respondent_name = serializers.CharField(source="respondent.name", read_only=True)
+    report = serializers.SerializerMethodField()
+
+    class Meta:
+        model = AssessmentInvitation
+        fields = (
+            "id",
+            "organization",
+            "organization_name",
+            "assessment",
+            "assessment_name",
+            "assessment_version_label",
+            "category_name",
+            "respondent",
+            "respondent_name",
+            "status",
+            "due_date",
+            "sent_at",
+            "started_at",
+            "submitted_at",
+            "created_at",
+            "report",
+        )
+
+    def get_report(self, invitation):
+        report = getattr(invitation, "report", None)
+        if report is None or report.share_status != ReportShareStatus.SHARED:
+            return None
+        return {
+            "id": str(report.id),
+            "overall_score": str(report.overall_score),
+            "maturity_band_label": report.maturity_band_label,
+            "shared_at": report.shared_at,
+        }
+
+
+class MyReportDetailSerializer(ReportDetailSerializer):
+    """Full shared report for the respondent: scores, gaps and recommendations,
+    but none of the sharing controls (token/status) the org uses."""
+
+    organization_name = serializers.CharField(source="organization.name", read_only=True)
+    assessment_name = serializers.CharField(source="invitation.assessment.name", read_only=True, default="")
+    shared_at = serializers.DateTimeField(read_only=True)
+
+    class Meta(ReportDetailSerializer.Meta):
+        fields = tuple(
+            f for f in ReportDetailSerializer.Meta.fields if f not in ("share_token", "share_status")
+        ) + ("organization_name", "assessment_name", "shared_at")
+        read_only_fields = fields
+
+
+class MyReportSerializer(serializers.ModelSerializer):
+    organization_name = serializers.CharField(source="organization.name", read_only=True)
+    respondent_name = serializers.CharField(source="respondent.name", read_only=True)
+    assessment_name = serializers.CharField(source="invitation.assessment.name", read_only=True, default="")
+    category_name = serializers.CharField(source="respondent.category.name", read_only=True, default="")
+    submitted_at = serializers.DateTimeField(source="invitation.submitted_at", read_only=True)
+
+    class Meta:
+        model = Report
+        fields = (
+            "id",
+            "organization",
+            "organization_name",
+            "respondent",
+            "respondent_name",
+            "assessment_name",
+            "category_name",
+            "overall_score",
+            "maturity_band_label",
+            "submitted_at",
+            "shared_at",
+            "generated_at",
+        )
+
+
+# --- Filling in an assessment --------------------------------------------
+
+
+class QuestionnaireOptionSerializer(serializers.ModelSerializer):
+    """Options as the respondent sees them — score values are deliberately hidden."""
+
+    class Meta:
+        model = QuestionOption
+        fields = ("id", "label", "likert_position", "display_order")
+
+
+class QuestionnaireQuestionSerializer(serializers.ModelSerializer):
+    options = QuestionnaireOptionSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = Question
+        fields = (
+            "id",
+            "capability",
+            "sub_capability",
+            "question_text",
+            "help_text",
+            "question_type",
+            "is_required",
+            "allow_not_applicable",
+            "numeric_unit",
+            "numeric_min",
+            "numeric_max",
+            "display_order",
+            "page_no",
+            "options",
+        )
+
+
+class MyResponseSerializer(serializers.ModelSerializer):
+    selected_options = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Response
+        fields = ("question", "answer_value", "is_not_applicable", "selected_options", "answered_at")
+
+    def get_selected_options(self, response):
+        return [str(selection.question_option_id) for selection in response.selected_options.all()]
+
+
+class AnswerInputSerializer(serializers.Serializer):
+    question = serializers.UUIDField()
+    answer_value = serializers.JSONField(required=False, allow_null=True)
+    selected_options = serializers.ListField(child=serializers.UUIDField(), required=False, default=list)
+    is_not_applicable = serializers.BooleanField(required=False, default=False)
+
+
+class SaveAnswersSerializer(serializers.Serializer):
+    answers = AnswerInputSerializer(many=True)
+
+
+class GradeResponseSerializer(serializers.Serializer):
+    reviewer_score = serializers.DecimalField(max_digits=6, decimal_places=2, min_value=0)
+
+
+class PendingResponseSerializer(serializers.ModelSerializer):
+    """A free-text answer waiting for a reviewer to assign points."""
+
+    question_text = serializers.CharField(source="question.question_text", read_only=True)
+    capability_name = serializers.CharField(source="question.capability.name", read_only=True)
+    max_points = serializers.DecimalField(
+        source="question.max_points", max_digits=6, decimal_places=2, read_only=True
+    )
+    respondent_name = serializers.CharField(source="invitation.respondent.name", read_only=True)
+    assessment_name = serializers.CharField(source="invitation.assessment.name", read_only=True)
+    is_scored = serializers.BooleanField(source="question.is_scored", read_only=True)
+
+    class Meta:
+        model = Response
+        fields = (
+            "id",
+            "invitation",
+            "question",
+            "question_text",
+            "is_scored",
+            "capability_name",
+            "respondent_name",
+            "assessment_name",
+            "answer_value",
+            "max_points",
+            "reviewer_score",
+            "reviewed_at",
+            "answered_at",
+        )
+
+
+class ReviewQueueItemSerializer(serializers.ModelSerializer):
+    respondent_name = serializers.CharField(source="respondent.name", read_only=True)
+    assessment_name = serializers.CharField(source="assessment.name", read_only=True)
+    pending_review = serializers.IntegerField(read_only=True)
+    free_text_count = serializers.IntegerField(read_only=True, default=0)
+    report_id = serializers.SerializerMethodField()
+    overall_score = serializers.SerializerMethodField()
+
+    class Meta:
+        model = AssessmentInvitation
+        fields = (
+            "id",
+            "organization",
+            "assessment",
+            "assessment_name",
+            "respondent",
+            "respondent_name",
+            "status",
+            "submitted_at",
+            "pending_review",
+            "free_text_count",
+            "report_id",
+            "overall_score",
+        )
+
+    def get_report_id(self, invitation):
+        report = getattr(invitation, "report", None)
+        return str(report.id) if report else None
+
+    def get_overall_score(self, invitation):
+        report = getattr(invitation, "report", None)
+        return str(report.overall_score) if report else None

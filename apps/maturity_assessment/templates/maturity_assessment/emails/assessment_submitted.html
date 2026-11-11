@@ -1,0 +1,12 @@
+<!DOCTYPE html>
+<html>
+  <body style="font-family: Arial, sans-serif; color: #1f2937; line-height: 1.5;">
+    <p>Hi,</p>
+    <p><strong>{{ respondent_name }}</strong> has submitted the <strong>{{ assessment_name }}</strong> assessment for {{ organization_name }}.</p>
+    <p>
+      Auto-scored result: <strong>{{ overall_score }}/100</strong>{% if maturity_band_label %} &middot; {{ maturity_band_label }}{% endif %}.
+    </p>
+    {% if pending_review %}<p><strong>{{ pending_review }}</strong> free-text answer{{ pending_review|pluralize }} still need{{ pending_review|pluralize:"s," }} your points before the score is final.</p>{% endif %}
+    <p>The report has been generated as a draft. <a href="{{ login_url }}" style="color: #2563eb;">Sign in</a> to review it and share it with the respondent.</p>
+  </body>
+</html>

@@ -4,6 +4,7 @@ from django.db.models import Count, Q
 from django.shortcuts import get_object_or_404
 from django.utils.text import slugify
 from rest_framework import status
+from rest_framework.exceptions import ValidationError
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 
@@ -13,6 +14,7 @@ from accounts.services import invite_member, reset_password_by_admin
 from apps.core.models import Organization, OrganizationModule, PlatformModule
 from apps.core.serializers import MembershipSerializer
 from apps.platform.serializers import (
+    CreatePlatformAdminSerializer,
     InvitePlatformMemberSerializer,
     PlatformOrganizationCreateSerializer,
     PlatformOrganizationSerializer,
@@ -57,8 +59,11 @@ def organizations_list(request):
                 slug=_unique_slug(data["name"]),
                 **data,
             )
-            OrganizationModule.objects.create(
-                organization=organization, module=PlatformModule.ASSESSMENT, is_enabled=True
+            OrganizationModule.objects.bulk_create(
+                [
+                    OrganizationModule(organization=organization, module=PlatformModule.ASSESSMENT, is_enabled=True),
+                    OrganizationModule(organization=organization, module=PlatformModule.DISBURSEMENT, is_enabled=True),
+                ]
             )
             if admin_data:
                 invite_member(
@@ -154,10 +159,37 @@ def _serialize_user(u):
     }
 
 
-@api_view(["GET"])
+@api_view(["GET", "POST"])
 @permission_classes([IsPlatformAdmin])
 def users_list(request):
+    if request.method == "POST":
+        # Creates a new system (platform) admin. The account is created with an
+        # unusable password, then the admin password-reset flow issues a temp
+        # password by email and forces the first-login OTP + set-password flow.
+        serializer = CreatePlatformAdminSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        email = User.objects.normalize_email(data["email"])
+        if User.objects.filter(email=email).exists():
+            raise ValidationError({"email": "An account with this email already exists."})
+        with transaction.atomic():
+            user = User.objects.create_user(
+                email=email,
+                password=None,
+                first_name=data["first_name"],
+                last_name=data["last_name"],
+                phone_number=data.get("phone_number", ""),
+                is_email_verified=True,
+            )
+            PlatformAdmin.objects.create(user=user, granted_by=request.user)
+            reset_password_by_admin(user=user, actor=request.user, request=request)
+        user.membership_count = 0
+        return Response(PlatformUserSerializer(_serialize_user(user)).data, status=status.HTTP_201_CREATED)
+
     users = User.objects.annotate(membership_count=Count("memberships", distinct=True)).order_by("-date_joined")
+
+    if request.query_params.get("is_platform_admin", "").lower() in ("1", "true"):
+        users = users.filter(platform_admin__isnull=False)
 
     search = request.query_params.get("search", "").strip()
     if search:

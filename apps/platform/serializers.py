@@ -79,3 +79,10 @@ class InvitePlatformMemberSerializer(serializers.Serializer):
     first_name = serializers.CharField(required=False, allow_blank=True, default="")
     last_name = serializers.CharField(required=False, allow_blank=True, default="")
     role = serializers.ChoiceField(choices=MembershipRole.choices)
+
+
+class CreatePlatformAdminSerializer(serializers.Serializer):
+    email = serializers.EmailField()
+    first_name = serializers.CharField()
+    last_name = serializers.CharField()
+    phone_number = serializers.CharField(required=False, allow_blank=True, default="")

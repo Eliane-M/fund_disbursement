@@ -1,0 +1,16 @@
+{% autoescape off %}
+Hi {{ contact_name }},
+
+{{ inviter_name }} from {{ organization_name }} has invited {{ respondent_name }} to complete the {{ assessment_name }} assessment on {{ site_name }}.
+{% if due_date %}
+Please complete it by {{ due_date|date:"F j, Y" }}.
+{% endif %}
+{% if temp_password %}Sign in with your email address and this temporary password:
+
+{{ temp_password }}
+
+You'll be asked to verify a one-time code on first sign-in, then set a password of your own.
+{% else %}Sign in with your existing account to get started.
+{% endif %}
+If you were not expecting this invitation, you can ignore this email.
+{% endautoescape %}

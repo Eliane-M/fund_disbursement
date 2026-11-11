@@ -1,7 +1,7 @@
 from rest_framework import serializers
 
 from accounts.models import MembershipRole
-from apps.core.models import Organization, Respondent
+from apps.core.models import Notification, Organization, Respondent
 
 
 class OrganizationSerializer(serializers.ModelSerializer):
@@ -91,3 +91,20 @@ class InviteMemberSerializer(serializers.Serializer):
         if attrs["role"] != MembershipRole.RESPONDENT and attrs.get("respondent"):
             raise serializers.ValidationError({"respondent": "Only the respondent role links to a respondent."})
         return attrs
+
+
+class NotificationSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Notification
+        fields = (
+            "id",
+            "organization",
+            "template_key",
+            "subject",
+            "payload",
+            "related_entity_type",
+            "related_entity_id",
+            "status",
+            "read_at",
+            "created_at",
+        )

@@ -226,6 +226,11 @@ class OrganizationMembership(models.Model):
                 fields=["organization", "user"],
                 name="organization_memberships_org_user_uniq",
             ),
+            models.UniqueConstraint(
+                fields=["user"],
+                condition=models.Q(role__in=[MembershipRole.ORG_ADMIN, MembershipRole.REVIEWER]),
+                name="memberships_one_staff_org_per_user",
+            ),
             models.CheckConstraint(
                 condition=models.Q(role__in=MembershipRole.values),
                 name="organization_memberships_role_valid",

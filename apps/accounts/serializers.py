@@ -13,6 +13,8 @@ class MembershipMiniSerializer(serializers.Serializer):
     organization_name = serializers.CharField(source="organization.name")
     role = serializers.CharField()
     status = serializers.CharField()
+    respondent = serializers.UUIDField(source="respondent_id", allow_null=True)
+    respondent_name = serializers.CharField(source="respondent.name", default="")
 
 
 class UserSerializer(serializers.ModelSerializer):
@@ -49,7 +51,7 @@ class UserSerializer(serializers.ModelSerializer):
         return is_platform_admin(user)
 
     def get_memberships(self, user):
-        memberships = user.memberships.select_related("organization")
+        memberships = user.memberships.select_related("organization", "respondent")
         return MembershipMiniSerializer(memberships, many=True).data
 
 

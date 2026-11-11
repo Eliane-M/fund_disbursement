@@ -47,6 +47,7 @@ def send_password_reset_by_admin_email(user, actor, temp_password):
         "actor_name": actor.full_name if actor else "An admin",
         "temp_password": temp_password,
         "site_name": settings.SITE_NAME,
+        "login_url": settings.FRONTEND_LOGIN_URL,
     }
     text_body = render_to_string("accounts/emails/password_reset_by_admin.txt", context)
     html_body = render_to_string("accounts/emails/password_reset_by_admin.html", context)
@@ -68,6 +69,7 @@ def send_welcome_email(user, organization, inviter, temp_password):
         "inviter_name": inviter.full_name if inviter else "An admin",
         "temp_password": temp_password,
         "site_name": settings.SITE_NAME,
+        "login_url": settings.FRONTEND_LOGIN_URL,
     }
     text_body = render_to_string("accounts/emails/welcome.txt", context)
     html_body = render_to_string("accounts/emails/welcome.html", context)

@@ -11,7 +11,14 @@ from rest_framework.exceptions import AuthenticationFailed, PermissionDenied, Va
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from accounts.emails import send_otp_email, send_password_reset_by_admin_email, send_welcome_email
-from accounts.models import AuthEvent, AuthEventType, OTPChallenge, OTPPurpose
+from accounts.models import (
+    AuthEvent,
+    AuthEventType,
+    MembershipRole,
+    OrganizationMembership,
+    OTPChallenge,
+    OTPPurpose,
+)
 
 User = get_user_model()
 
@@ -389,6 +396,75 @@ def change_password(*, user, current_password, new_password, request=None):
     return user
 
 
+STAFF_ROLES = (MembershipRole.ORG_ADMIN, MembershipRole.REVIEWER)
+
+
+def assert_role_available(user, role, *, exclude_membership=None):
+    """Staff (org admins and reviewers) may belong to only one organization;
+    respondents may belong to any number of organizations."""
+    if user is None or role not in STAFF_ROLES:
+        return
+
+    existing = OrganizationMembership.objects.filter(user=user, role__in=STAFF_ROLES).select_related(
+        "organization"
+    )
+    if exclude_membership is not None:
+        existing = existing.exclude(pk=exclude_membership.pk)
+    other = existing.first()
+    if other is not None:
+        article = "an" if other.role == MembershipRole.ORG_ADMIN else "a"
+        raise ValidationError(
+            {
+                "role": (
+                    f"This person is already {article} {MembershipRole(other.role).label.lower()} of "
+                    f"{other.organization.name}. Staff can belong to only one organization."
+                )
+            }
+        )
+
+
+def _create_invited_user(email, first_name="", last_name=""):
+    """Create an account with a temporary password; the first-login OTP +
+    set-password flow takes over when they sign in. Returns (user, temp_password)."""
+    temp_password = secrets.token_urlsafe(9)
+    user = User.objects.create_user(
+        email=email,
+        password=temp_password,
+        first_name=first_name or "",
+        last_name=last_name or "",
+        is_email_verified=True,
+    )
+    record_auth_event(AuthEventType.REGISTERED, user=user, request=None, metadata={"invited": True})
+    return user, temp_password
+
+
+def ensure_respondent_account(*, respondent, invited_by):
+    """Make sure the respondent's primary contact can sign in as a respondent
+    of the respondent's organization. Returns (user, temp_password), where
+    temp_password is None if the account already existed."""
+    from accounts.models import MembershipStatus
+
+    email = User.objects.normalize_email(respondent.primary_contact_email)
+    user = User.objects.filter(email=email).first()
+    temp_password = None
+
+    if user is None:
+        first_name, _, last_name = (respondent.primary_contact_name or respondent.name).strip().partition(" ")
+        user, temp_password = _create_invited_user(email, first_name, last_name)
+
+    if not OrganizationMembership.objects.filter(organization_id=respondent.organization_id, user=user).exists():
+        OrganizationMembership.objects.create(
+            organization_id=respondent.organization_id,
+            user=user,
+            role=MembershipRole.RESPONDENT,
+            respondent=respondent,
+            status=MembershipStatus.ACTIVE,
+            invited_by=invited_by,
+            accepted_at=timezone.now(),
+        )
+    return user, temp_password
+
+
 def invite_member(*, organization, email, role, invited_by, first_name="", last_name="", respondent=None):
     """Add a user to an organization with a role.
 
@@ -404,17 +480,10 @@ def invite_member(*, organization, email, role, invited_by, first_name="", last_
     normalized = User.objects.normalize_email(email)
     user = User.objects.filter(email=normalized).first()
     is_new_account = user is None
+    assert_role_available(user, role)
 
     if user is None:
-        temp_password = secrets.token_urlsafe(9)
-        user = User.objects.create_user(
-            email=normalized,
-            password=temp_password,
-            first_name=first_name or "",
-            last_name=last_name or "",
-            is_email_verified=True,
-        )
-        record_auth_event(AuthEventType.REGISTERED, user=user, request=None, metadata={"invited": True})
+        user, temp_password = _create_invited_user(normalized, first_name, last_name)
         send_welcome_email(user, organization, invited_by, temp_password)
 
     if OrganizationMembership.objects.filter(organization=organization, user=user).exists():
