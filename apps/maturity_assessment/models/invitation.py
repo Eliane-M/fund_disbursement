@@ -154,7 +154,7 @@ class ResponseSelectedOption(models.Model):
         constraints = [
             models.UniqueConstraint(
                 fields=["response", "question_option"],
-                name="response_selected_options_pkey",
+                name="response_selected_options_uniq",
             ),
         ]
 

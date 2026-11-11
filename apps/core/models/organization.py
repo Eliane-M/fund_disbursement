@@ -87,7 +87,7 @@ class OrganizationModule(models.Model):
         constraints = [
             models.UniqueConstraint(
                 fields=["organization", "module"],
-                name="organization_modules_pkey",
+                name="organization_modules_org_module_uniq",
             ),
             models.CheckConstraint(
                 condition=models.Q(
@@ -127,7 +127,7 @@ class OrganizationSetting(models.Model):
         constraints = [
             models.UniqueConstraint(
                 fields=["organization", "module"],
-                name="organization_settings_pkey",
+                name="organization_settings_org_module_uniq",
             ),
             models.CheckConstraint(
                 condition=models.Q(module__in=PlatformModule.values),

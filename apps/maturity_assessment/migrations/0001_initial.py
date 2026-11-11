@@ -443,7 +443,7 @@ class Migration(migrations.Migration):
         ),
         migrations.AddConstraint(
             model_name='responseselectedoption',
-            constraint=models.UniqueConstraint(fields=('response', 'question_option'), name='response_selected_options_pkey'),
+            constraint=models.UniqueConstraint(fields=('response', 'question_option'), name='response_selected_options_uniq'),
         ),
         migrations.AddIndex(
             model_name='subcapability',

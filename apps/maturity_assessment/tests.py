@@ -35,7 +35,11 @@ class InlineThread:
         self._target = target
 
     def start(self):
-        self._target()
+        # The real thread closes its own DB connections when it finishes. Run
+        # inline, that would close the test's connection (a no-op on in-memory
+        # SQLite, fatal on Postgres), so neutralise it here.
+        with patch("apps.maturity_assessment.services.connections"):
+            self._target()
 
 
 @override_settings(MAILERS=TEST_MAILERS)

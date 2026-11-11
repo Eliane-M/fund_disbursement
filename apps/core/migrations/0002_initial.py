@@ -101,7 +101,7 @@ class Migration(migrations.Migration):
         ),
         migrations.AddConstraint(
             model_name='organizationmodule',
-            constraint=models.UniqueConstraint(fields=('organization', 'module'), name='organization_modules_pkey'),
+            constraint=models.UniqueConstraint(fields=('organization', 'module'), name='organization_modules_org_module_uniq'),
         ),
         migrations.AddConstraint(
             model_name='organizationmodule',
@@ -109,7 +109,7 @@ class Migration(migrations.Migration):
         ),
         migrations.AddConstraint(
             model_name='organizationsetting',
-            constraint=models.UniqueConstraint(fields=('organization', 'module'), name='organization_settings_pkey'),
+            constraint=models.UniqueConstraint(fields=('organization', 'module'), name='organization_settings_org_module_uniq'),
         ),
         migrations.AddConstraint(
             model_name='organizationsetting',
