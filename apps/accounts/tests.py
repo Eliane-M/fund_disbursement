@@ -8,7 +8,16 @@ from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APIClient
 
-from accounts.models import OTPChallenge, OTPPurpose, User
+from accounts.models import (
+    MembershipRole,
+    MembershipStatus,
+    OrganizationMembership,
+    OTPChallenge,
+    OTPPurpose,
+    User,
+)
+from accounts.services import invite_member
+from apps.core.models import Organization, PlatformModule
 
 TEST_MAILERS = {
     "default": {"BACKEND": "django.core.mail.backends.locmem.EmailBackend"}
@@ -26,6 +35,7 @@ class AuthenticationFlowTests(TestCase):
             "password": self.password,
             "first_name": "Ada",
             "last_name": "Lovelace",
+            "organization_name": "Analytical Engines Ltd",
         }
 
     def register(self, otp="123456"):
@@ -33,6 +43,11 @@ class AuthenticationFlowTests(TestCase):
             response = self.client.post(reverse("auth-register"), self.user_payload, format="json")
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         return User.objects.get(email="ada@example.com")
+
+    def expire_otps(self):
+        # Skip the resend cooldown so the form can be re-submitted straight away.
+        cache.clear()
+        OTPChallenge.objects.update(consumed_at=timezone.now())
 
     def verify_email(self, otp="123456"):
         response = self.client.post(
@@ -49,6 +64,83 @@ class AuthenticationFlowTests(TestCase):
         user = User.objects.get(email="ada@example.com")
         self.assertFalse(user.is_email_verified)
         self.assertTrue(user.is_first_login)
+
+    def test_register_creates_organization_with_user_as_admin(self):
+        user = self.register()
+        organization = Organization.objects.get(slug="analytical-engines-ltd")
+        self.assertEqual(organization.name, "Analytical Engines Ltd")
+        membership = OrganizationMembership.objects.get(user=user)
+        self.assertEqual(membership.organization, organization)
+        self.assertEqual(membership.role, MembershipRole.ORG_ADMIN)
+        self.assertEqual(membership.status, MembershipStatus.ACTIVE)
+        self.assertEqual(
+            set(organization.modules.filter(is_enabled=True).values_list("module", flat=True)),
+            {PlatformModule.ASSESSMENT, PlatformModule.DISBURSEMENT},
+        )
+
+    def test_register_requires_organization_name(self):
+        del self.user_payload["organization_name"]
+        response = self.client.post(reverse("auth-register"), self.user_payload, format="json")
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("organization_name", response.data)
+        self.assertFalse(User.objects.filter(email="ada@example.com").exists())
+
+    def test_register_rejects_name_without_a_usable_slug(self):
+        self.user_payload["organization_name"] = "!!!"
+        response = self.client.post(reverse("auth-register"), self.user_payload, format="json")
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("organization_name", response.data)
+
+    def test_register_rejects_organization_with_existing_slug(self):
+        Organization.objects.create(name="Analytical Engines", slug="analytical-engines-ltd")
+        response = self.client.post(reverse("auth-register"), self.user_payload, format="json")
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("organization_name", response.data)
+        # Nothing is left half-created.
+        self.assertFalse(User.objects.filter(email="ada@example.com").exists())
+        self.assertEqual(Organization.objects.count(), 1)
+
+    def test_organization_uniqueness_is_by_slug_not_exact_name(self):
+        self.register()
+        self.user_payload.update(email="grace@example.com", organization_name="analytical  ENGINES ltd")
+        response = self.client.post(reverse("auth-register"), self.user_payload, format="json")
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("organization_name", response.data)
+
+    def test_reregistering_unverified_user_renames_their_organization(self):
+        self.register()
+        self.user_payload["organization_name"] = "Difference Engines"
+        self.expire_otps()
+        self.register()
+        self.assertEqual(Organization.objects.count(), 1)
+        self.assertEqual(Organization.objects.get().slug, "difference-engines")
+        self.assertEqual(OrganizationMembership.objects.count(), 1)
+
+    def test_reregistering_unverified_user_can_keep_the_same_organization(self):
+        self.register()
+        self.expire_otps()
+        self.register()
+        self.assertEqual(Organization.objects.count(), 1)
+        self.assertEqual(OrganizationMembership.objects.count(), 1)
+
+    def test_invited_users_do_not_get_their_own_organization(self):
+        inviter = User.objects.create_user(
+            email="admin@example.com", password=self.password, first_name="A", last_name="B"
+        )
+        organization = Organization.objects.create(name="Host Org", slug="host-org")
+        with patch("accounts.services.send_welcome_email"):
+            membership, is_new = invite_member(
+                organization=organization,
+                email="invitee@example.com",
+                role=MembershipRole.REVIEWER,
+                invited_by=inviter,
+            )
+        self.assertTrue(is_new)
+        self.assertEqual(Organization.objects.count(), 1)
+        self.assertEqual(
+            list(OrganizationMembership.objects.filter(user=membership.user)),
+            [membership],
+        )
 
     def test_unverified_user_cannot_login(self):
         self.register()

@@ -1,5 +1,6 @@
 from django.contrib.auth import get_user_model
 from django.contrib.auth.password_validation import validate_password
+from django.utils.text import slugify
 from rest_framework import serializers
 
 from accounts.models import OTPPurpose
@@ -61,12 +62,21 @@ class RegisterSerializer(serializers.Serializer):
     first_name = serializers.CharField(max_length=150)
     last_name = serializers.CharField(max_length=150)
     phone_number = serializers.CharField(max_length=32, required=False, allow_blank=True, default="")
+    organization_name = serializers.CharField(max_length=255)
 
     def validate_email(self, value):
         return User.objects.normalize_email(value)
 
     def validate_password(self, value):
         validate_password(value)
+        return value
+
+    def validate_organization_name(self, value):
+        value = " ".join(value.split())
+        if not slugify(value):
+            raise serializers.ValidationError(
+                "Organization name must contain at least one letter or number."
+            )
         return value
 
 

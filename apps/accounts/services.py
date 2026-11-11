@@ -5,8 +5,9 @@ from datetime import timedelta
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.utils import timezone
+from django.utils.text import slugify
 from rest_framework.exceptions import AuthenticationFailed, PermissionDenied, ValidationError
 from rest_framework_simplejwt.tokens import RefreshToken
 
@@ -15,10 +16,12 @@ from accounts.models import (
     AuthEvent,
     AuthEventType,
     MembershipRole,
+    MembershipStatus,
     OrganizationMembership,
     OTPChallenge,
     OTPPurpose,
 )
+from apps.core.models import Organization, OrganizationModule, PlatformModule
 
 User = get_user_model()
 
@@ -193,13 +196,88 @@ def verify_otp(user, purpose, code, request=None):
     return challenge
 
 
+def _organization_name_taken():
+    return ValidationError(
+        {"organization_name": "An organization with this name already exists."}
+    )
+
+
+def _create_self_registered_organization(*, user, name):
+    """Create the organization for a user who signed up on their own, and make
+    them its admin. Organizations are unique by slug, so a name that collides
+    with an existing organization is rejected rather than suffixed — otherwise
+    anyone could end up looking like a member of someone else's organization."""
+    slug = slugify(name)
+    if Organization.objects.filter(slug=slug).exists():
+        raise _organization_name_taken()
+
+    try:
+        with transaction.atomic():
+            organization = Organization.objects.create(
+                name=name, slug=slug, contact_email=user.email
+            )
+    except IntegrityError as exc:  # lost a race with a concurrent signup
+        raise _organization_name_taken() from exc
+
+    OrganizationModule.objects.bulk_create(
+        [
+            OrganizationModule(organization=organization, module=PlatformModule.ASSESSMENT, is_enabled=True),
+            OrganizationModule(organization=organization, module=PlatformModule.DISBURSEMENT, is_enabled=True),
+        ]
+    )
+    OrganizationMembership.objects.create(
+        organization=organization,
+        user=user,
+        role=MembershipRole.ORG_ADMIN,
+        status=MembershipStatus.ACTIVE,
+        accepted_at=timezone.now(),
+    )
+    return organization
+
+
+def _update_self_registered_organization(*, organization, name):
+    """An unverified user re-submitting the signup form may have corrected the
+    organization name; rename the organization they already created."""
+    slug = slugify(name)
+    if slug != organization.slug:
+        if Organization.objects.filter(slug=slug).exclude(pk=organization.pk).exists():
+            raise _organization_name_taken()
+        organization.slug = slug
+    organization.name = name
+    try:
+        with transaction.atomic():
+            organization.save(update_fields=["name", "slug", "updated_at"])
+    except IntegrityError as exc:
+        raise _organization_name_taken() from exc
+
+
 @transaction.atomic
-def register_user(*, email, password, first_name, last_name, phone_number="", request=None):
+def register_user(
+    *, email, password, first_name, last_name, organization_name, phone_number="", request=None
+):
+    """Self-serve signup: creates the account and the organization it admins.
+
+    Invited users never come through here (see `invite_member`), so they join
+    the inviting organization and don't get one of their own.
+    """
     normalized = User.objects.normalize_email(email)
     existing = User.objects.filter(email=normalized).first()
     if existing:
         if existing.is_email_verified:
             raise ValidationError({"email": "An account with this email already exists."})
+
+        membership = (
+            OrganizationMembership.objects.filter(user=existing, role=MembershipRole.ORG_ADMIN)
+            .select_related("organization")
+            .first()
+        )
+        if membership:
+            _update_self_registered_organization(
+                organization=membership.organization, name=organization_name
+            )
+        else:
+            _create_self_registered_organization(user=existing, name=organization_name)
+
         existing.first_name = first_name
         existing.last_name = last_name
         existing.phone_number = phone_number
@@ -223,6 +301,7 @@ def register_user(*, email, password, first_name, last_name, phone_number="", re
         last_name=last_name,
         phone_number=phone_number,
     )
+    _create_self_registered_organization(user=user, name=organization_name)
     record_auth_event(AuthEventType.REGISTERED, user=user, request=request)
     create_and_send_otp(user, OTPPurpose.EMAIL_VERIFICATION, request=request)
     return user
